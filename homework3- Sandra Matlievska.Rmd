@@ -1,7 +1,7 @@
 ---
 title: "Homework 3: Databases, web scraping, and a basic Shiny app"
-author: "Your name goes here"
-date: "`r Sys.Date()`"
+author: "Sandra Matlievska"
+date: "`r Sys.Date(25.05.2023)`"
 output:
   html_document:
     theme: flatly
@@ -52,31 +52,107 @@ You can [search and explore the results](https://news.sky.com/story/westminster-
 The database made available by Simon Willison is an `SQLite` database
 
 ```{r}
+
 sky_westminster <- DBI::dbConnect(
   drv = RSQLite::SQLite(),
   dbname = here::here("data", "sky-westminster-files.db")
 )
+
 ```
 
 How many tables does the database have?
 
 ```{r}
 DBI::dbListTables(sky_westminster)
+
+#It has 7 tables. 
 ```
 
 ## Which MP has received the most amount of money? 
 
 You need to work with the `payments` and `members` tables and for now we just want the total among all years. To insert a new, blank chunk of code where you can write your beautiful code (and comments!), please use the following shortcut: `Ctrl + Alt + I` (Windows) or `cmd + option + I` (mac)
 
+```{r}
+
+members <- dplyr::tbl(sky_westminster, "members") %>% 
+  collect()
+
+payments <- dplyr::tbl(sky_westminster, "payments") %>% 
+  collect()
+
+new <- members %>% 
+  left_join(payments, by = c("id" ="member_id")) %>% 
+  group_by(name) %>% 
+  select(name, value) %>% 
+  summarise(total_value = sum(value)) %>% 
+  arrange(desc(total_value)) %>% 
+  collect()
+
+```
+
 
 ## Any `entity` that accounts for more than 5% of all donations?
 
 Is there any `entity` whose donations account for more than 5% of the total payments given to MPs over the 2020-2022 interval? Who are they and who did they give money to?
 
+```{r}
+
+entities <- payments %>% 
+  group_by(entity) %>% 
+  select(entity, value) %>% 
+  summarise(total_value = sum(value)) %>% 
+  arrange(desc(total_value))%>%
+  collect()
+  
+total <- sum(entities$total_value)
+
+prop_entities <- entities %>% 
+  mutate(value_prop = (total_value/total)*100) 
+
+#Withers LLP
+
+withers <- payments %>% 
+  filter(entity == "Withers LLP") %>% 
+  collect()
+
+#Donated to m1508, or Sir Geoffrey Cox.
+
+```
+
+
 ## Do `entity` donors give to a single party or not?
 
 - How many distinct entities who paid money to MPS are there?
 - How many (as a number and %) donated to MPs belonging to a single party only?
+
+```{r}
+
+distinct <- payments %>% 
+  summarize(unique_count = n_distinct(entity)) %>% 
+  collect()
+
+#2213
+
+parties <- members %>% 
+  left_join(payments, by = c("id" ="member_id")) %>% 
+  group_by(entity) %>% 
+  count(party_id)
+
+single <- parties %>% 
+  filter(!is.na(entity)) %>% 
+  count(entity) %>% 
+  arrange(desc(n))
+
+number_single <- single %>% 
+  filter(n==1)
+
+#2036 donated to single.
+
+prop <- 2036/2213
+
+# 92%
+
+```
 
 
 ## Which party has raised the greatest amount of money in each of the years 2020-2022? 
