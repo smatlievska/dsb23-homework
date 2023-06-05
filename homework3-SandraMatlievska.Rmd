@@ -1,7 +1,7 @@
 ---
 title: "Homework 3: Databases, web scraping, and a basic Shiny app"
 author: "Sandra Matlievska"
-date: "`r Sys.Date(25.05.2023)`"
+date: "`r Sys.Date()`"
 output:
   html_document:
     theme: flatly
@@ -34,6 +34,7 @@ library(robotstxt) # check if we're allowed to scrape the data
 library(scales)
 library(sf)
 library(readxl)
+library(RSQLite)
 ```
 
 # Money in UK politics
@@ -63,9 +64,11 @@ sky_westminster <- DBI::dbConnect(
 How many tables does the database have?
 
 ```{r}
+
 DBI::dbListTables(sky_westminster)
 
 #It has 7 tables. 
+
 ```
 
 ## Which MP has received the most amount of money? 
@@ -74,11 +77,15 @@ You need to work with the `payments` and `members` tables and for now we just wa
 
 ```{r}
 
+#First I extracted the payments, and members tables.
+
 members <- dplyr::tbl(sky_westminster, "members") %>% 
   collect()
 
 payments <- dplyr::tbl(sky_westminster, "payments") %>% 
   collect()
+
+#Then, I created a new table, where I joined both tables by the member id to extract total amount each member had received in donations. 
 
 new <- members %>% 
   left_join(payments, by = c("id" ="member_id")) %>% 
@@ -97,25 +104,34 @@ Is there any `entity` whose donations account for more than 5% of the total paym
 
 ```{r}
 
+#First I create a table with all of the entities, add in the year as a column, filtered for the relevant years, and grouped by entity. Then I summarized the total value of the donations through the sum function. I then arranged the total value in descending order. 
+
 entities <- payments %>% 
+  mutate(year = str_sub(date, -4)) %>% 
+  filter(year == c("2020", "2021", "2022")) %>% 
   group_by(entity) %>% 
   select(entity, value) %>% 
   summarise(total_value = sum(value)) %>% 
   arrange(desc(total_value))%>%
   collect()
   
+#I also calculated the total value of all the donations across the three years.
 total <- sum(entities$total_value)
 
+#And then added a new column with the proportions in percentages of donations. 
 prop_entities <- entities %>% 
   mutate(value_prop = (total_value/total)*100) 
 
-#Withers LLP
+#The conclusion was that Withers LLP was the only entity whose donations account for more than 5% of the total payments given to MPs over the 2020-2022 interval.
+
+#Then I filtered to see who he donated to:
 
 withers <- payments %>% 
   filter(entity == "Withers LLP") %>% 
+  count(member_id) %>% 
   collect()
 
-#Donated to m1508, or Sir Geoffrey Cox.
+#And found that he donated to m1508, or Sir Geoffrey Cox.
 
 ```
 
@@ -127,18 +143,22 @@ withers <- payments %>%
 
 ```{r}
 
+#To find the number of distinct entities who paid money to MPS, I used the summarize and the n_distinct function.
+
 distinct <- payments %>% 
   summarize(unique_count = n_distinct(entity)) %>% 
   collect()
 
-#2213
+#I found that there were 2213 distinct entities.
 
-parties <- members %>% 
+my_parties <- members %>% 
   left_join(payments, by = c("id" ="member_id")) %>% 
   group_by(entity) %>% 
   count(party_id)
 
-single <- parties %>% 
+#Then to find how many donated to MPs belonging to a single party only, I counted the entities, and then filtered for those that appeared once. 
+
+single <- my_parties %>% 
   filter(!is.na(entity)) %>% 
   count(entity) %>% 
   arrange(desc(n))
@@ -146,11 +166,11 @@ single <- parties %>%
 number_single <- single %>% 
   filter(n==1)
 
-#2036 donated to single.
+#I found that 2036 donated to MPs belonging to a single party only.
 
 prop <- 2036/2213
 
-# 92%
+#This equates to 92%.
 
 ```
 
@@ -161,6 +181,29 @@ I would like you to write code that generates the following table.
 
 ```{r echo=FALSE, out.width="80%"}
 knitr::include_graphics(here::here("images", "total_donations_table.png"), error = FALSE)
+
+#To replicate the table, I first joined the members and payments tables, then I used the mutate function to create a new column named year, and filtered for only the relevant years. I then summed the value to derive total year donations. I also calculated the percentage the values represented within each year. 
+
+table <- members %>% 
+  left_join(payments, by = c("id" ="member_id")) %>% 
+  mutate(year = str_sub(date, -4)) %>% 
+  filter(year == c("2020", "2021", "2022")) %>% 
+  filter(!is.na(year)) %>% 
+  group_by(year, party_id) %>% 
+  summarise(total_year_donations = sum(value)) %>% 
+  mutate(percent = total_year_donations / sum(total_year_donations)) %>% 
+  collect()
+
+parties <- dplyr::tbl(sky_westminster, "parties") %>% 
+  collect()
+
+#I then used the left join witht the parties data to change the id for the name of each party, and arranged by year. 
+           
+table2 <- left_join(table, parties, by = c("party_id" = "id")) %>% 
+  select(year, name, total_year_donations, percent) %>% 
+  arrange(year) %>% 
+  mutate(name = fct_reorder(name, -total_year_donations))
+
 ```
 
 
@@ -168,9 +211,76 @@ knitr::include_graphics(here::here("images", "total_donations_table.png"), error
 
 ```{r echo=FALSE, out.width="80%"}
 knitr::include_graphics(here::here("images", "total_donations_graph.png"), error = FALSE)
+
+#I then used table 2 to plot the bar graph, and followed the title and color guidelines as the picture showed. 
+
+ggplot(table2) +
+  aes(year, total_year_donations, fill = fct_reorder(name, -total_year_donations)) +
+  geom_bar(stat = "identity", position = position_dodge())  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Conservatives have captured the majority of political donations", 
+       subtitle = "Donations to political parties, 2020-2022",
+            x = "", 
+            y = "", 
+            fill = "Party")
+
 ```
 
 This uses the default ggplot colour pallete, as I dont want you to worry about using the [official colours for each party](https://en.wikipedia.org/wiki/Wikipedia:Index_of_United_Kingdom_political_parties_meta_attributes). However, I would like you to ensure the parties are sorted according to total donations and not alphabetically. You may even want to remove some of the smaller parties that hardly register on the graph. Would facetting help you?  
+
+```{r}
+
+#I then created a new table to filter for when total donations are smaller than 400000, to show as other, to try a build a simpler visualisation. 
+
+table3 <- table2 %>% 
+  mutate(name = case_when(
+    total_year_donations > 400000 ~ as.character(name),
+    TRUE ~ "Other"
+  ))  
+
+#I then used table3 to plot the bar graph.
+
+ggplot(table3) +
+  aes(year, total_year_donations, fill = fct_reorder(name, -total_year_donations)) +
+  geom_bar(stat = "identity", position = position_dodge())  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Conservatives have captured the majority of political donations", 
+       subtitle = "Donations to political parties, 2020-2022",
+            x = NULL, 
+            y = NULL, 
+            fill = "Party")
+
+#I also applied facet wrap to table 2 to see how it would impact the visual clarity of the data. 
+
+ggplot(table2) +
+  aes(year, total_year_donations, fill = fct_reorder(name, -total_year_donations)) +
+  facet_wrap( ~name, scales="free") +
+  geom_bar(stat = "identity", position = position_dodge())  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Conservatives have captured the majority of political donations", 
+       subtitle = "Donations to political parties, 2020-2022",
+            x = NULL, 
+            y = NULL, 
+            fill = "Party")+
+  theme(legend.position =  "none")
+
+#And made another attempt with facet wrap to table 3. 
+
+ggplot(table3) +
+  aes(year, total_year_donations, fill = fct_reorder(name, -total_year_donations)) +
+  facet_wrap( ~name) +
+  geom_bar(stat = "identity", position = position_dodge())  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Conservatives have captured the majority of political donations", 
+       subtitle = "Donations to political parties, 2020-2022",
+            x = "", 
+            y = "", 
+            fill = "Party")
+
+
+
+```
+
 
 Finally, when you are done working with the databse, make sure you close the connection, or disconnect from the database.
 
@@ -193,31 +303,34 @@ The dataset `cdc-covid-geography` in in `parquet` format that {arrow}can handle.
 #| warning: false
 
 
-tic() # start timer
-cdc_data <- open_dataset(here::here("data", "cdc-covid-geography"))
-toc() # stop timer
+#tic() # start timer
+#cdc_data <- open_dataset(here::here("data", "cdc-covid-geography"))
+#toc() # stop timer
 
 
-glimpse(cdc_data)
+#glimpse(cdc_data)
+
+#This data completely broke my R studio, I tried updating the program, my software, re-downloading all the packages, and yet still nothing seems to work after having experienced what R keeps calling a fatal error. 
+
 ```
 Can you query the database and replicate the following plot?
 
 ```{r echo=FALSE, out.width="100%"}
-knitr::include_graphics(here::here("images", "covid-CFR-ICU.png"), error = FALSE)
+#knitr::include_graphics(here::here("images", "covid-CFR-ICU.png"), error = FALSE)
 ```
 
 The previous plot is an aggregate plot for all three years of data. What if we wanted to plot Case Fatality Ratio (CFR) over time? Write code that collects the relevant data from the database and plots the following
 
 
 ```{r echo=FALSE, out.width="100%"}
-knitr::include_graphics(here::here("images", "cfr-icu-overtime.png"), error = FALSE)
+#knitr::include_graphics(here::here("images", "cfr-icu-overtime.png"), error = FALSE)
 ```
 
 
 For each patient, the dataframe also lists the patient's states and county [FIPS code](https://en.wikipedia.org/wiki/Federal_Information_Processing_Standard_state_code). The CDC also has information on the [NCHS Urban-Rural classification scheme for counties](https://www.cdc.gov/nchs/data_access/urban_rural.htm)
 ```{r}
-urban_rural <- read_xlsx(here::here("data", "NCHSURCodes2013.xlsx")) %>% 
-  janitor::clean_names() 
+#urban_rural <- read_xlsx(here::here("data", "NCHSURCodes2013.xlsx")) %>% 
+  #janitor::clean_names() 
 ```
 
 
@@ -236,13 +349,13 @@ Can you query the database, extract the relevant information, and reproduce the 
 
 
 ```{r echo=FALSE, out.width="100%"}
-knitr::include_graphics(here::here("images", "cfr-county-population.png"), error = FALSE)
+#knitr::include_graphics(here::here("images", "cfr-county-population.png"), error = FALSE)
 ```
 
 
 
 ```{r echo=FALSE, out.width="100%"}
-knitr::include_graphics(here::here("images", "cfr-rural-urban.png"), error = FALSE)
+#knitr::include_graphics(here::here("images", "cfr-rural-urban.png"), error = FALSE)
 ```
 
 
@@ -254,7 +367,7 @@ We will scrape and work with data foreign connected PACs that donate to US polit
 
 All data come from [OpenSecrets.org](https://www.opensecrets.org), a *"website tracking the influence of money on U.S. politics, and how that money affects policy and citizens' lives"*.
 
-```{r, eval=FALSE}
+```{r}
 #| label: allow-scraping-opensecrets
 #| warning: false
 #| message: false
@@ -264,34 +377,47 @@ paths_allowed("https://www.opensecrets.org")
 
 base_url <- "https://www.opensecrets.org/political-action-committees-pacs/foreign-connected-pacs/2022"
 
+#Similar to what we did on slide 40 in the UK Cost of living exercise, I applied the read html, html nodes, and table code to get the tables that exist on our base url. 
+
 contributions_tables <- base_url %>%
-  read_html() 
+  read_html() %>% 
+  html_nodes(css="table") %>% 
+  html_table() 
 
 ```
 
 - First, make sure you can scrape the data for 2022. Use janitor::clean_names() to rename variables scraped using `snake_case` naming. 
+
+```{r}
+
+library(janitor)
+
+#Then to get the first table we use [[]], and then use the clean names  function to rename variables scraped using `snake_case` naming.
+
+contributions <- contributions_tables[[1]] %>% 
+  janitor::clean_names()
+
+```
+
 
 - Clean the data: 
 
     -   Write a function that converts contribution amounts in `total`, `dems`, and `repubs` from character strings to numeric values.
     -   Separate the `country_of_origin_parent_company` into two such that country and parent company appear in different columns for country-level analysis.
 
-```{r, eval=FALSE}
-# write a function to parse_currency
+```{r}
+
+# Created a function to parse_currency that removed dollar signs, all occurrences of commas, and converted the data type to numeric.
+
 parse_currency <- function(x){
   x %>%
-    
-    # remove dollar signs
     str_remove("\\$") %>%
-    
-    # remove all occurrences of commas
     str_remove_all(",") %>%
-    
-    # convert to numeric
     as.numeric()
 }
 
-# clean country/parent co and contributions 
+#Then cleaned country/parent co and contributions.
+
 contributions <- contributions %>%
   separate(country_of_origin_parent_company, 
            into = c("country", "parent"), 
@@ -302,23 +428,77 @@ contributions <- contributions %>%
     dems = parse_currency(dems),
     repubs = parse_currency(repubs)
   )
+
 ```
-
-
-
 
 -   Write a function called `scrape_pac()` that scrapes information from the Open Secrets webpage for foreign-connected PAC contributions in a given year. This function should
 
     -   have one input: the URL of the webpage and should return a data frame.
     -   add a new column to the data frame for `year`. We will want this information when we ultimately have data from all years, so this is a good time to keep track of it. Our function doesn't take a year argument, but the year is embedded in the URL, so we can extract it out of there, and add it as a new column. Use the `str_sub()` function to extract the last 4 characters from the URL. You will probably want to look at the help for this function to figure out how to specify "last 4 characters".
+    
+```{r}
 
--   Define the URLs for 2022, 2020, and 2000 contributions. Then, test your function using these URLs as inputs. Does the function seem to do what you expected it to do?
+#Created a function to get tables that exist on url, then isolated all tables on page, parsed an html table into a dataframe, and used `tables[[1]]` to get first table, finally adding a new column with the year.
+
+
+
+scrape_pac <- function(year) {
+
+base_url <- "https://www.opensecrets.org/political-action-committees-pacs/foreign-connected-pacs/"
+url <- str_c(base_url, year)
+  
+  contributions <- url %>% 
+    read_html() %>% 
+    html_element("table") %>% 
+    html_table() %>% 
+    janitor::clean_names()
+  
+  
+contributions <- contributions %>%
+  separate(country_of_origin_parent_company, 
+           into = c("country", "parent"), 
+           sep = "/", 
+           extra = "merge") %>%
+  mutate(
+    total = parse_currency(total),
+    dems = parse_currency(dems),
+    repubs = parse_currency(repubs)
+  ) %>% 
+  mutate(year = year)
+  
+  
+ return(contributions)
+  
+}
+
+
+
+```
+
 
 -   Construct a vector called `urls` that contains the URLs for each webpage that contains information on foreign-connected PAC contributions for a given year.
-
 -   Map the `scrape_pac()` function over `urls` in a way that will result in a data frame called `contributions_all`.
 
+```{r}
+#Prepared base url and year variables
+years <- seq(2000, 2022, by = 2)
+
+
+#Created urls table, and applied the scrape pac function.
+contributions_all <- map_df(years, scrape_pac)
+
+
+```
+
+
 -   Write the data frame to a csv file called `contributions-all.csv` in the `data` folder.
+
+```{r}
+
+#Wrote the data frame to a CSV file called `contributions-all.csv`.
+write.csv(contributions_all, "contributions-all.csv")
+
+```
 
 
 # Scraping consulting jobs
@@ -332,9 +512,9 @@ The website [https://www.consultancy.uk/jobs/](https://www.consultancy.uk/jobs) 
 library(robotstxt)
 paths_allowed("https://www.consultancy.uk") #is it ok to scrape?
 
-base_url <- "https://www.consultancy.uk/jobs/page/1"
+url_con <- "https://www.consultancy.uk/jobs/page/1"
 
-listings_html <- base_url %>%
+listings_html <- url_con %>%
   read_html()
 
 ```
@@ -348,7 +528,6 @@ Identify the CSS selectors in order to extract the relevant information from thi
 
 Can you get all pages of ads, and not just the first one, `https://www.consultancy.uk/jobs/page/1` into a dataframe?
 
-
 -   Write a function called `scrape_jobs()` that scrapes information from the webpage for consulting positions. This function should
 
     -   have one input: the URL of the webpage and should return a data frame with four columns (variables): job, firm, functional area, and type
@@ -357,31 +536,64 @@ Can you get all pages of ads, and not just the first one, `https://www.consultan
 
     -   Given that you have to scrape `...jobs/page/1`, `...jobs/page/2`, etc., define your URL so you can join multiple stings into one string, using `str_c()`. For instnace, if `page` is 5, what do you expect the following code to produce?
     
-```
-base_url <- "https://www.consultancy.uk/jobs/page/1"
-url <- str_c(base_url, page)
+
+```{r}
+
+#Set up my base url, pages, and the function for constructing each page's url. 
+
+base_con <- "https://www.consultancy.uk/jobs/page/"
+pages <- 1:8
+url_con <- str_c(base_con, pages)
+
+#Then I created the scrapeing function for each page.  
+
+scrape_jobs <- function(page){
+  
+  base_con <- "https://www.consultancy.uk/jobs/page/"
+url_con <- str_c(base_con, page)
+  
+  page_jobs <- url_con %>%
+    read_html() %>%
+    html_element("#dataTable") %>% 
+    html_table()
+  
+  return(page_jobs)
+  
+}
+
+#Tested it on page 1. 
+
+page1 <- "https://www.consultancy.uk/jobs/page/1"
+jobs_dataframe <- scrape_jobs(1)
+
 ```
 
+
 -   Construct a vector called `pages` that contains the numbers for each page available
+
+```{r}
+
+#Constructed a vector called pages, for each page of the website, and the url_con like before. 
+
+pages <- 1:8
+all_jobs <- map_df(pages, scrape_jobs)
+
+
+
+```
 
 
 -   Map the `scrape_jobs()` function over `pages` in a way that will result in a data frame called `all_consulting_jobs`.
 
+
 -   Write the data frame to a csv file called `all_consulting_jobs.csv` in the `data` folder.
 
+```{r}
 
+#Wrote the data frame to a CSV file called `contributions-all.csv`.
+write_csv(all_jobs, "all_consulting_jobs.csv")
 
-# Create a shiny app - OPTIONAL
-
-We have already worked with the data on electricity production and usage, GDP/capita and CO2/capita since 1990.
-You have to create a simple Shiny app, where a user chooses a country from a drop down list and a time interval between 1990 and 2020 and shiny outputs the following
-
-```{r echo=FALSE, out.width="100%"}
-knitr::include_graphics(here::here("images", "electricity-shiny.png"), error = FALSE)
 ```
-
-You can use chatGPT to get the basic layout of Shiny app, but you need to adjust the code it gives you. Ask chatGPT to create the Shiny app using the `gapminder` data and make up similar requests for the inputs/outpus you are thinking of deploying.
-
 
 
 # Deliverables
@@ -390,9 +602,9 @@ There is a lot of explanatory text, comments, etc. You do not need these, so del
 
 # Details
 
--   Who did you collaborate with: TYPE NAMES HERE
--   Approximately how much time did you spend on this problem set: ANSWER HERE
--   What, if anything, gave you the most trouble: ANSWER HERE
+-   Who did you collaborate with: This week I asked everyone I could for help, especially when my R studio was crashing and burning, namely Patrick, Maxim, Abdulaziz, and João.
+-   Approximately how much time did you spend on this problem set: More than I would like to admit, multiple days, most of the time I was working on making R studio work
+-   What, if anything, gave you the most trouble: R studio showing fatal errors and shutting down, after I tried running the data from problem 2
 
 **Please seek out help when you need it,** and remember the [15-minute rule](https://dsb2023.netlify.app/syllabus/#the-15-minute-rule){target="_blank"}. You know enough R (and have enough examples of code from class and your readings) to be able to do this. If you get stuck, ask for help from others, post a question on Slack-- and remember that I am here to help too!
 
